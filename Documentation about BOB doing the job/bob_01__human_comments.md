@@ -21,5 +21,4 @@ And this analysis seems to be nothing less than perfect! It made me want to use 
 
 After the "Stammtisch" i decided that this is a wonderful project and continued in english to address a larger audience.
 
-
 [Continue reading](bob_02__human_comments.md)
