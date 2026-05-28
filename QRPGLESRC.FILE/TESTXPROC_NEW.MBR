@@ -1,0 +1,174 @@
+**free
+//
+// TESTXPROC - FTP with Status Callback Example (Free-Format Version)
+//
+// Copyright (c) 2001-2025 Scott C. Klement
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+// 1. Redistributions of source code must retain the above copyright
+//    notice, this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ''AS IS'' AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+// OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+// OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+// SUCH DAMAGE.
+//
+
+///
+/// This is a simple example of using the FTPAPI to download a file
+/// from ftp.freebsd.org with a status callback procedure.
+///
+/// Steps:
+///   1) Connect to the server
+///   2) Switch to the pub/FreeBSD/tools directory
+///   3) Register a status callback procedure
+///   4) Download fips.exe in binary mode (with progress updates)
+///   5) Log out
+///
+
+ctl-opt dftactgrp(*no) actgrp(*new) bnddir('FTPAPI');
+ctl-opt option(*srcstmt: *nodebugio);
+
+/copy FTPAPI_H
+
+// Forward declarations
+dcl-pr status;
+  bytes packed(16: 0) value;
+  totBytes packed(16: 0) value;
+end-pr;
+
+// Variables
+dcl-s ftp int(10);
+dcl-s msg char(52);
+
+// ============================================================================
+// Main Program Logic
+// ============================================================================
+
+// Connect to FTP server
+// Using userid: anonymous
+// Password: anon.e.mouse@aol.com
+ftp = ftp_conn('ftp2.freebsd.org'
+             : 'anonymous'
+             : 'anon.e.mouse@aol.com');
+
+// Check for connection errors
+if ftp < 0;
+  msg = ftp_errorMsg(0);
+  dsply msg;
+  *inlr = *on;
+  return;
+endif;
+
+// Change to the FreeBSD tools directory
+// Deal with any errors
+if ftp_chdir(ftp: 'pub/FreeBSD/tools') < 0;
+  msg = ftp_errorMsg(ftp);
+  dsply msg;
+  ftp_quit(ftp);
+  *inlr = *on;
+  return;
+endif;
+
+// Register a 'status' procedure
+// FTPAPI will call this proc whenever data is received,
+// giving us a 'byte count'
+if ftp_xproc(FTP_EXTSTS: %paddr('STATUS')) < 0;
+  msg = ftp_errorMsg(ftp);
+  dsply msg;
+  ftp_quit(ftp);
+  *inlr = *on;
+  return;
+endif;
+
+// Get the FIPS utility (runs under DOS)
+// Save it to the root directory, locally
+ftp_binaryMode(ftp: *on);
+
+if ftp_get(ftp: 'fips.exe': '/fips.exe') < 0;
+  msg = ftp_errorMsg(ftp);
+  dsply msg;
+  ftp_quit(ftp);
+  *inlr = *on;
+  return;
+endif;
+
+// The transfer was successful
+ftp_quit(ftp);
+msg = 'Success!';
+dsply msg;
+*inlr = *on;
+
+
+// ============================================================================
+// Status Callback Procedure
+// ============================================================================
+
+///
+/// Example of showing the status of a file transfer. All this does is
+/// put a status message on the screen showing the number of bytes transferred.
+///
+/// Note: You should not do anything here that takes a lot of time,
+///       it will slow down the file transfer.
+///
+/// @param bytes Number of bytes transferred so far
+/// @param totBytes Total number of bytes to transfer
+///
+dcl-proc status;
+  dcl-pi *n;
+    bytes packed(16: 0) value;
+    totBytes packed(16: 0) value;
+  end-pi;
+
+  // API to send program message
+  dcl-pr sndPgmMsg extpgm('QMHSNDPM');
+    messageID char(7) const;
+    qualMsgF char(20) const;
+    msgData char(256) const;
+    msgDtaLen int(10) const;
+    msgType char(10) const;
+    callStkEnt char(10) const;
+    callStkCnt int(10) const;
+    messageKey char(4);
+    errorCode char(1);
+  end-pr;
+
+  // Error code structure
+  dcl-ds dsEC qualified;
+    bytesP int(10) inz(0);
+    bytesA int(10) inz(0);
+  end-ds;
+
+  // Local variables
+  dcl-s wwBytes char(16);
+  dcl-s wwTotal char(16);
+  dcl-s wwMsg char(55);
+  dcl-s wwTheKey char(4);
+
+  // Convert numbers to strings
+  wwBytes = %char(bytes);
+  wwTotal = %char(totBytes);
+  
+  // Build status message
+  wwMsg = 'Bytes transferred: ' + %trim(wwBytes) 
+        + ' of ' + %trim(wwTotal);
+
+  // Send status message
+  sndPgmMsg('CPF9897': 'QCPFMSG   *LIBL'
+          : wwMsg: %size(wwMsg): '*STATUS'
+          : '*EXT': 0: wwTheKey: dsEC);
+
+end-proc;

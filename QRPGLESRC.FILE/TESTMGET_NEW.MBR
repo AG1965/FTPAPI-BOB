@@ -1,0 +1,299 @@
+**free
+//
+// TESTMGET - Multiple File Download Example (Free-Format Version)
+//
+// Copyright (c) 2001-2025 Scott C. Klement
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+// 1. Redistributions of source code must retain the above copyright
+//    notice, this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ''AS IS'' AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+// OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+// OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+// SUCH DAMAGE.
+//
+
+///
+/// TESTMGET - Multiple File Download (MGET) Example
+///
+/// This program demonstrates how to download multiple files from an FTP
+/// server in a single session. This is equivalent to the MGET command
+/// found in most FTP clients.
+///
+/// Key Features Demonstrated:
+///   - FTP session logging for debugging
+///   - Directory listing (ftp_list)
+///   - Batch file downloads
+///   - Error handling for individual file failures
+///   - Completion message reporting
+///
+/// Process Flow:
+///   1) Enable FTP logging to joblog for debugging
+///   2) Connect to FTP server with timeout
+///   3) Navigate to target directory
+///   4) Get list of files in directory (up to 50 files)
+///   5) Download each file to local /incoming directory
+///   6) Report success/failure statistics
+///   7) Close FTP session
+///
+/// Prerequisites:
+///   - Local directory /incoming must exist
+///   - Sufficient disk space for downloads
+///   - Network connectivity to ftp2.freebsd.org
+///
+/// Example Usage:
+///   CALL TESTMGET_NEW
+///
+/// Output:
+///   - Files downloaded to /incoming/
+///   - Completion message with file count
+///   - FTP session log in joblog (DSPJOBLOG)
+///
+
+ctl-opt dftactgrp(*no) actgrp(*new) bnddir('FTPAPI');
+ctl-opt option(*srcstmt: *nodebugio);
+
+/copy FTPAPI_H
+
+// ============================================================================
+// Forward Declarations
+// ============================================================================
+
+///
+/// Send a completion message to the calling program
+///
+dcl-pr compMsg;
+  msgTxt char(256) const;
+end-pr;
+
+// ============================================================================
+// Global Variables
+// ============================================================================
+
+// Array to hold filenames from directory listing
+// Maximum 50 files can be retrieved in one call
+dcl-s incoming char(256) dim(50);
+
+// Number of files found in directory listing
+dcl-s num_files int(10);
+
+// Loop counter for processing files
+dcl-s fileno int(10);
+
+// Return code from FTP operations
+dcl-s rc int(10);
+
+// FTP session file descriptor/handle
+dcl-s fd int(10);
+
+// Error number from FTP operations
+dcl-s errNum int(10);
+
+// Counter for successfully downloaded files
+dcl-s gotfiles int(10);
+
+// Remote directory path to download from
+dcl-s folder varchar(256);
+
+// ============================================================================
+// Main Program Logic
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// Step 1: Enable FTP Session Logging
+// ----------------------------------------------------------------------------
+// This logs all FTP commands and responses to the joblog
+// Very useful for debugging connection or transfer problems
+// Use DSPJOBLOG to view the FTP session details
+ftp_logging(0: *on);
+
+// ----------------------------------------------------------------------------
+// Step 2: Connect to FTP Server
+// ----------------------------------------------------------------------------
+// Parameters:
+//   - Host: ftp2.freebsd.org (public FreeBSD FTP server)
+//   - User: anonymous (standard for public FTP)
+//   - Pass: ftp@ (email address convention for anonymous FTP)
+//   - Port: FTP_PORT (21 - standard FTP port)
+//   - Timeout: 120 seconds (connection will timeout if no data for 2 minutes)
+//
+// Returns: File descriptor (>=0) on success, -1 on failure
+fd = ftp_conn('ftp2.freebsd.org'
+            : 'anonymous'
+            : 'ftp@'
+            : FTP_PORT
+            : 120);
+
+// Check if connection was successful
+if fd < 0;
+  compMsg(ftp_errorMsg(0));
+  *inlr = *on;
+  return;
+endif;
+
+// ----------------------------------------------------------------------------
+// Step 3: Navigate to Target Directory
+// ----------------------------------------------------------------------------
+// Change to the directory containing files we want to download
+// This is an archived FreeBSD release directory with floppy disk images
+folder = 'pub/FreeBSD-Archive/old-releases/i386/2.2.7-RELEASE/floppies';
+
+if ftp_chdir(fd: folder) < 0;
+  compMsg(ftp_errorMsg(fd));
+  ftp_quit(fd);
+  *inlr = *on;
+  return;
+endif;
+
+// ----------------------------------------------------------------------------
+// Step 4: Get Directory Listing
+// ----------------------------------------------------------------------------
+// Retrieve list of files in current directory
+// Parameters:
+//   - fd: FTP session handle
+//   - ' ': Wildcard (space = all files)
+//   - 50: Maximum number of files to retrieve
+//   - %addr(incoming): Address of array to store filenames
+//   - num_files: Returns actual number of files found
+//
+// Returns: 0 on success, -1 on error
+rc = ftp_list(fd: ' ': 50: %addr(incoming): num_files);
+
+// Handle directory listing errors
+if rc < 0;
+  // Get the specific error number
+  ftp_errorMsg(fd: errNum);
+  
+  // FTP_NOFILE means directory is empty (not a fatal error)
+  if errNum = FTP_NOFILE;
+    num_files = 0;
+  else;
+    // Other errors are fatal - report and exit
+    compMsg(ftp_errorMsg(fd));
+    ftp_quit(fd);
+    *inlr = *on;
+    return;
+  endif;
+endif;
+
+// ----------------------------------------------------------------------------
+// Step 5: Download All Files
+// ----------------------------------------------------------------------------
+// Loop through each file in the directory and download it
+// Note: Individual file failures don't stop the batch process
+gotfiles = 0;
+
+for fileno = 1 to num_files;
+  // Download current file
+  // Parameters:
+  //   - fd: FTP session handle
+  //   - incoming(fileno): Remote filename
+  //   - '/incoming/' + filename: Local path (concatenated)
+  //
+  // Returns: 0 on success, -1 on error
+  // Note: We continue even if one file fails
+  if ftp_get(fd
+           : incoming(fileno)
+           : '/incoming/' + %trim(incoming(fileno))) >= 0;
+    // Increment success counter
+    gotfiles += 1;
+  endif;
+  // If download fails, we silently continue to next file
+  // Check joblog for details on failed downloads
+endfor;
+
+// ----------------------------------------------------------------------------
+// Step 6: Close FTP Session and Report Results
+// ----------------------------------------------------------------------------
+// Always close the FTP session to free resources
+ftp_quit(fd);
+
+// Send completion message based on results
+if gotfiles > 0;
+  compMsg('Success! Downloaded ' + %char(gotfiles) + ' of ' 
+        + %char(num_files) + ' files.');
+else;
+  compMsg('No files received! Check joblog for errors.');
+endif;
+
+*inlr = *on;
+
+
+// ============================================================================
+// CompMsg - Send Completion Message
+// ============================================================================
+
+///
+/// Send a completion message to the calling program
+///
+/// This procedure sends a *COMP (completion) message to the program
+/// message queue of the calling program. This is useful for batch jobs
+/// or called programs to report their final status.
+///
+/// The message will appear in the joblog and can be monitored by
+/// the calling program using RCVMSG or similar commands.
+///
+/// @param msgTxt The message text to send (max 256 characters)
+///
+/// Example:
+///   compMsg('Processing completed successfully');
+///   compMsg('Error: File not found');
+///
+dcl-proc compMsg;
+  dcl-pi *n;
+    msgTxt char(256) const;
+  end-pi;
+
+  // IBM API to send program messages
+  dcl-pr sndPgmMsg extpgm('QMHSNDPM');
+    messageID char(7) const;      // Message ID (CPF9897 = user message)
+    qualMsgF char(20) const;      // Message file (QCPFMSG in *LIBL)
+    msgData char(256) const;      // Message text
+    msgDtaLen int(10) const;      // Length of message text
+    msgType char(10) const;       // Message type (*COMP, *DIAG, *INFO, etc.)
+    callStkEnt char(10) const;    // Call stack entry (*PGMBDY = program boundary)
+    callStkCnt int(10) const;     // Call stack counter (1 = immediate caller)
+    messageKey char(4);           // Returned message key
+    errorCode char(256);          // Error code structure
+  end-pr;
+
+  // Error code data structure for API
+  // If bytesP > 0, errors are returned in this structure
+  // If bytesP = 0, errors cause exceptions
+  dcl-ds dsEC qualified;
+    bytesP int(10) inz(256);     // Bytes provided (size of this structure)
+    bytesA int(10) inz(0);       // Bytes available (returned by API)
+    msgID char(7);               // Message ID of any error
+    reserv char(1);              // Reserved
+    msgDta char(240);            // Message data of any error
+  end-ds;
+
+  // Local working variables
+  dcl-s wwMsgLen int(10);        // Actual length of message text
+  dcl-s wwTheKey char(4);        // Message key (returned but not used)
+
+  // Calculate actual message length by trimming trailing blanks
+  // This ensures we don't send unnecessary spaces
+  wwMsgLen = %len(%trimr(msgTxt));
+
+  // Send the completion message
+  // CPF9897 is a generic "user message" that allows custom text
+  sndPgmMsg('CPF9897': 'QCPFMSG   *LIBL'
+          : msgTxt: wwMsgLen: '*COMP'
+          : '*PGMBDY': 1: wwTheKey: dsEC);
+
+end-proc;

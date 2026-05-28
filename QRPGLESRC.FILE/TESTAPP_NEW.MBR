@@ -1,0 +1,84 @@
+**free
+//
+// TESTAPP - Simple FTP APPEND Example (Free-Format Version)
+//
+// Copyright (c) 2001-2025 Scott C. Klement
+// All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions
+// are met:
+// 1. Redistributions of source code must retain the above copyright
+//    notice, this list of conditions and the following disclaimer.
+// 2. Redistributions in binary form must reproduce the above copyright
+//    notice, this list of conditions and the following disclaimer in the
+//    documentation and/or other materials provided with the distribution.
+//
+// THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ''AS IS'' AND
+// ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+// IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+// ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+// FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+// DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+// OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+// LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+// OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+// SUCH DAMAGE.
+//
+
+///
+/// This is a simple example of appending ("adding") a file from this
+/// IBM i onto the end of a file on a remote FTP server.
+///
+/// Note: Unlike the GET examples, I do not know of a public server
+/// where I can APPEND a file as an example. So, you'll need to fill
+/// in the server, user and password below to somewhere you can upload to.
+///
+
+ctl-opt dftactgrp(*no) actgrp(*new) bnddir('FTPAPI');
+ctl-opt option(*srcstmt: *nodebugio);
+
+/copy FTPAPI_H
+
+// Variables
+dcl-s msg char(52);
+dcl-s sess int(10);
+
+// ============================================================================
+// Main Program Logic
+// ============================================================================
+
+// Connect to FTP server
+// If an error occurs, display an error message and exit
+sess = ftp_conn('ftpserv.mydomain.com'
+              : 'myname'
+              : 'mypassword');
+
+if sess < 0;
+  msg = ftp_errorMsg(0);
+  dsply msg;
+  *inlr = *on;
+  return;
+endif;
+
+// Place the TESTPUT source member onto the FTP server
+ftp_binaryMode(sess: *off);
+
+if ftp_put(sess
+         : 'testput.rpg4'
+         : '/qsys.lib/libftp.lib/qrpglesrc.file/testput.mbr') < 0;
+  msg = ftp_errorMsg(sess);
+  dsply msg;
+endif;
+
+// Append the TESTAPP member onto the end of the TESTPUT member
+if ftp_append(sess
+            : 'testput.rpg4'
+            : '/qsys.lib/libftp.lib/qrpglesrc.file/testapp.mbr') < 0;
+  msg = ftp_errorMsg(sess);
+  dsply msg;
+endif;
+
+ftp_quit(sess);
+*inlr = *on;
